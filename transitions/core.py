@@ -68,29 +68,30 @@ class State(object):
         callback_list.append(func)
 
 
+class Condition(object):
+
+    def __init__(self, func, target=True):
+        self.func = func
+        self.target = target
+
+    def check(self, event_data):
+        """ Check whether the condition passes.
+        Args:
+            event_data (EventData): An EventData instance to pass to the
+            condition (if event sending is enabled) or to extract arguments
+            from (if event sending is disabled). Also contains the data
+            model attached to the current machine which is used to invoke
+            the condition.
+        """
+        predicate = getattr(event_data.model, self.func)
+        if event_data.machine.send_event:
+            return predicate(event_data) == self.target
+        else:
+            return predicate(
+                *event_data.args, **event_data.kwargs) == self.target
+
+
 class Transition(object):
-
-    class Condition(object):
-
-        def __init__(self, func, target=True):
-            self.func = func
-            self.target = target
-
-        def check(self, event_data):
-            """ Check whether the condition passes.
-            Args:
-                event_data (EventData): An EventData instance to pass to the
-                condition (if event sending is enabled) or to extract arguments
-                from (if event sending is disabled). Also contains the data
-                model attached to the current machine which is used to invoke
-                the condition.
-            """
-            predicate = getattr(event_data.model, self.func)
-            if event_data.machine.send_event:
-                return predicate(event_data) == self.target
-            else:
-                return predicate(
-                    *event_data.args, **event_data.kwargs) == self.target
 
     def __init__(self, source, dest, conditions=None, unless=None, before=None,
                  after=None):
@@ -117,10 +118,10 @@ class Transition(object):
         self.conditions = []
         if conditions is not None:
             for c in listify(conditions):
-                self.conditions.append(self.Condition(c))
+                self.conditions.append(Condition(c))
         if unless is not None:
             for u in listify(unless):
-                self.conditions.append(self.Condition(u, target=False))
+                self.conditions.append(Condition(u, target=False))
 
     def execute(self, event_data):
         """ Execute the transition.
@@ -204,6 +205,7 @@ class Event(object):
         self.name = name
         self.machine = machine
         self.transitions = defaultdict(list)
+        self.non_transitions = []
 
     def add_transition(self, transition):
         """ Add a transition to the list of potential transitions.
@@ -212,6 +214,14 @@ class Event(object):
                 list.
         """
         self.transitions[transition.source].append(transition)
+
+    def add_non_transition(self, non_transition):
+        """ Add a non_transition to the list of potential non_transitions.
+        Args:
+            non_transition (NonTransition): The NonTransition instance to add to the
+                list.
+        """
+        self.non_transitions.append(non_transition)
 
     def trigger(self, *args, **kwargs):
         """ Serially execute all transitions that match the current state,
@@ -253,7 +263,7 @@ class Event(object):
 class Machine(object):
 
     def __init__(self, model=None, states=None, initial=None, transitions=None,
-                 send_event=False, auto_transitions=True,
+                 non_transitions=None, send_event=False, auto_transitions=True,
                  ordered_transitions=False, ignore_invalid_triggers=None,
                  before_state_change=None, after_state_change=None):
         """
@@ -318,12 +328,24 @@ class Machine(object):
                 else:
                     self.add_transition(**t)
 
+        if non_transitions is not None:
+            non_transitions = listify(non_transitions)
+            for t in non_transitions:
+                if isinstance(t, list):
+                    self.add_non_transition(*t)
+                else:
+                    self.add_non_transition(**t)
+
         if ordered_transitions:
             self.add_ordered_transitions()
 
     @staticmethod
     def _create_transition(*args, **kwargs):
         return Transition(*args, **kwargs)
+
+    @staticmethod
+    def _create_non_transition(*args, **kwargs):
+        return NonTransition(*args, **kwargs)
 
     @property
     def initial(self):
@@ -445,6 +467,33 @@ class Machine(object):
             t = self._create_transition(s, dest, conditions, unless, before, after)
             self.events[trigger].add_transition(t)
 
+    def add_non_transition(self, trigger, conditions=None,
+                           unless=None, before=None, after=None):
+        """ Create a new Transition instance and add it to the internal list.
+        Args:
+            trigger (string): The name of the method that will trigger the
+                non-transition. This will be attached to the currently specified
+                model (e.g., passing trigger='advance' will create a new
+                advance() method in the model that triggers the transition.)
+            conditions (string or list): Condition(s) that must pass in order
+                for the transition to take place. Either a list providing the
+                name of a callable, or a list of callables. For the transition
+                to occur, ALL callables must return True.
+            unless (string, list): Condition(s) that must return False in order
+                for the transition to occur. Behaves just like conditions arg
+                otherwise.
+            before (string or list): Callables to call before the transition.
+            after (string or list): Callables to call after the transition.
+
+        """
+        if trigger not in self.events:
+            self.events[trigger] = Event(trigger, self)
+            setattr(self.model, trigger, self.events[trigger].trigger)
+
+        for s in self.states.keys():
+            t = self._create_non_transition(conditions, unless, before, after)
+            self.events[trigger].add_non_transition(t)
+
     def add_ordered_transitions(self, states=None, trigger='next_state',
                                 loop=True, loop_includes_initial=True):
         """ Add a set of transitions that move linearly from state to state.
@@ -514,3 +563,47 @@ class MachineError(Exception):
 
     def __str__(self):
         return repr(self.value)
+
+
+class NonTransition(Transition):
+
+    def __init__(self, conditions=None, unless=None, before=None, after=None):
+        """
+        Args:
+            conditions (string, list): Condition(s) that must pass in order for
+                the transition to take place. Either a string providing the
+                name of a callable, or a list of callables. For the transition
+                to occur, ALL callables must return True.
+            unless (string, list): Condition(s) that must return False in order
+                for the transition to occur. Behaves just like conditions arg
+                otherwise.
+            before (string or list): callbacks to trigger before the
+                transition.
+            after (string or list): callbacks to trigger after the transition.
+        """
+        self.before = [] if before is None else listify(before)
+        self.after = [] if after is None else listify(after)
+
+        self.conditions = []
+        if conditions is not None:
+            for c in listify(conditions):
+                self.conditions.append(Condition(c))
+        if unless is not None:
+            for u in listify(unless):
+                self.conditions.append(Condition(u, target=False))
+
+    def execute(self, event_data):
+        """ Execute the transition.
+        Args:
+            event: An instance of class EventData.
+        """
+        machine = event_data.machine
+        for c in self.conditions:
+            if not c.check(event_data.model, event_data):
+                return False
+
+        for func in self.before:
+            machine.callback(getattr(event_data.model, func), event_data)
+        for func in self.after:
+            machine.callback(getattr(event_data.model, func), event_data)
+        return True
