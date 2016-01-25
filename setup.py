@@ -29,7 +29,7 @@ setup(
     package_data={'transitions': ['data/*'],
                   'transitions.tests': ['data/*']
                   },
-    install_requires=['six'],
+    install_requires=['six', 'pygraphviz'],
     tests_require=tests_require,
     license='MIT',
     download_url='https://github.com/tyarkoni/transitions/archive/%s.tar.gz' % __version__,
