@@ -166,6 +166,55 @@ class Transition(object):
         callback_list.append(func)
 
 
+class NonTransition(Transition):
+
+    def __init__(self, conditions=None, unless=None, before=None, after=None):
+        """
+        Args:
+            conditions (string, list): Condition(s) that must pass in order for
+                the transition to take place. Either a string providing the
+                name of a callable, or a list of callables. For the transition
+                to occur, ALL callables must return True.
+            unless (string, list): Condition(s) that must return False in order
+                for the transition to occur. Behaves just like conditions arg
+                otherwise.
+            before (string or list): callbacks to trigger before the
+                transition.
+            after (string or list): callbacks to trigger after the transition.
+        """
+        self.before = [] if before is None else listify(before)
+        self.after = [] if after is None else listify(after)
+
+        self.conditions = []
+        if conditions is not None:
+            for c in listify(conditions):
+                self.conditions.append(Condition(c))
+        if unless is not None:
+            for u in listify(unless):
+                self.conditions.append(Condition(u, target=False))
+
+    def execute(self, event_data):
+        """ Execute the transition.
+        Args:
+            event: An instance of class EventData.
+        Returns: boolean indicating whether or not the transition was
+            successfully executed (True if successful, False if not).
+        """
+        machine = event_data.machine
+        for c in self.conditions:
+            if not c.check(event_data):
+                logger.info("Transition condition failed: %s() does not " +
+                            "return %s. Transition halted.", c.func, c.target)
+                return False
+        for func in self.before:
+            machine.callback(getattr(event_data.model, func), event_data)
+            logger.info("Executing callback '%s' before transition." % func)
+        for func in self.after:
+            machine.callback(getattr(event_data.model, func), event_data)
+            logger.info("Executed callback '%s' after transition." % func)
+        return True
+
+
 class EventData(object):
 
     def __init__(self, state, event, machine, model, args, kwargs):
@@ -233,6 +282,12 @@ class Event(object):
         Returns: boolean indicating whether or not a transition was
             successfully executed (True if successful, False if not).
         """
+        event = EventData(self.machine.current_state, self, self.machine,
+                          self.machine.model, args=args, kwargs=kwargs)
+        for nt in self.non_transitions:
+            if nt.execute(event):
+                return True
+
         state_name = self.machine.current_state.name
         if state_name not in self.transitions:
             msg = "Can't trigger event %s from state %s!" % (self.name,
@@ -563,47 +618,3 @@ class MachineError(Exception):
 
     def __str__(self):
         return repr(self.value)
-
-
-class NonTransition(Transition):
-
-    def __init__(self, conditions=None, unless=None, before=None, after=None):
-        """
-        Args:
-            conditions (string, list): Condition(s) that must pass in order for
-                the transition to take place. Either a string providing the
-                name of a callable, or a list of callables. For the transition
-                to occur, ALL callables must return True.
-            unless (string, list): Condition(s) that must return False in order
-                for the transition to occur. Behaves just like conditions arg
-                otherwise.
-            before (string or list): callbacks to trigger before the
-                transition.
-            after (string or list): callbacks to trigger after the transition.
-        """
-        self.before = [] if before is None else listify(before)
-        self.after = [] if after is None else listify(after)
-
-        self.conditions = []
-        if conditions is not None:
-            for c in listify(conditions):
-                self.conditions.append(Condition(c))
-        if unless is not None:
-            for u in listify(unless):
-                self.conditions.append(Condition(u, target=False))
-
-    def execute(self, event_data):
-        """ Execute the transition.
-        Args:
-            event: An instance of class EventData.
-        """
-        machine = event_data.machine
-        for c in self.conditions:
-            if not c.check(event_data.model, event_data):
-                return False
-
-        for func in self.before:
-            machine.callback(getattr(event_data.model, func), event_data)
-        for func in self.after:
-            machine.callback(getattr(event_data.model, func), event_data)
-        return True
