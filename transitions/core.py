@@ -545,6 +545,12 @@ class Machine(object):
             self.events[trigger] = Event(trigger, self)
             setattr(self.model, trigger, self.events[trigger].trigger)
 
+        if self.before_state_change:
+            before = listify(before) + listify(self.before_state_change)
+
+        if self.after_state_change:
+            after = listify(after) + listify(self.after_state_change)
+
         for s in self.states.keys():
             t = self._create_non_transition(conditions, unless, before, after)
             self.events[trigger].add_non_transition(t)
