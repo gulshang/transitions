@@ -5,9 +5,9 @@ except ImportError:
 
 import time
 from threading import Thread
+import logging
 
-from transitions import LockedHierarchicalMachine
-from transitions import LockedMachine
+from transitions.extensions import MachineFactory
 from .test_nesting import TestTransitions as TestsNested
 from .test_core import TestTransitions as TestCore
 from .utils import Stuff
@@ -18,14 +18,23 @@ except ImportError:
     from mock import MagicMock
 
 
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+
 def heavy_processing():
     time.sleep(1)
+
+
+def heavy_checking():
+    time.sleep(1)
+    return False
 
 
 class TestLockedTransitions(TestCore):
 
     def setUp(self):
-        self.stuff = Stuff(machine_cls=LockedMachine)
+        self.stuff = Stuff(machine_cls=MachineFactory.get_predefined(locked=True))
         self.stuff.heavy_processing = heavy_processing
         self.stuff.machine.add_transition('process', '*', 'B', before='heavy_processing')
 
@@ -50,6 +59,17 @@ class TestLockedTransitions(TestCore):
         time.sleep(1)
         self.assertEqual(self.stuff.state, "C")
 
+    def test_conditional_access(self):
+        self.stuff.heavy_checking = heavy_checking # checking takes 1s and returns False
+        self.stuff.machine.add_transition('advance', 'A', 'B', conditions='heavy_checking')
+        self.stuff.machine.add_transition('advance', 'A', 'D')
+        t = Thread(target=self.stuff.advance)
+        t.start()
+        time.sleep(0.1)
+        logger.info('Check if state transition done...')
+        # Thread will release lock before Transition is finished
+        self.assertTrue(self.stuff.machine.is_state('D'))
+
     def test_pickle(self):
         import sys
         if sys.version_info < (3, 4):
@@ -63,6 +83,7 @@ class TestLockedTransitions(TestCore):
         dump = pickle.dumps(self.stuff)
         self.assertIsNotNone(dump)
         stuff2 = pickle.loads(dump)
+        print(stuff2)
         self.assertTrue(stuff2.machine.is_state("B"))
         # check if machines of stuff and stuff2 are truly separated
         stuff2.to_A()
@@ -91,7 +112,7 @@ class TestLockedHierarchicalTransitions(TestsNested, TestLockedTransitions):
     def setUp(self):
         states = ['A', 'B', {'name': 'C', 'children': ['1', '2', {'name': '3', 'children': ['a', 'b', 'c']}]},
           'D', 'E', 'F']
-        self.stuff = Stuff(states, machine_cls=LockedHierarchicalMachine)
+        self.stuff = Stuff(states, machine_cls=MachineFactory.get_predefined(locked=True, nested=True))
         self.stuff.heavy_processing = heavy_processing
         self.stuff.machine.add_transition('process', '*', 'B', before='heavy_processing')
 

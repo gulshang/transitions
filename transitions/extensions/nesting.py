@@ -1,58 +1,12 @@
-from .core import State, Machine, Transition, listify
-from .diagrams import AGraph
+from ..core import Machine, Transition, State, listify
 
-from threading import RLock
 from six import string_types
 from os.path import commonprefix
-import inspect
-import logging
 import copy
 
+import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
-
-
-class AAGraph(AGraph):
-    seen = []
-
-    def _add_nodes(self, states, container, initial_state=None):
-        # to be able to process children recursively as well as the state dict of a machine
-        states = states.values() if isinstance(states, dict) else states
-        for state in states:
-            if state.name in self.seen:
-                continue
-            elif state.children is not None:
-                self.seen.append(state.name)
-                sub = container.add_subgraph(name="cluster_" + state.name, label=state.name)
-                self._add_nodes(state.children, sub)
-            else:
-                if initial_state is None:
-                    initial_state = self.machine._initial
-
-                # We want the inital state to be a double circle (UML style)
-                if state.name == initial_state:
-                    shape = 'doublecircle'
-                else:
-                    shape = self.state_attributes['shape']
-
-                state = state.name
-                self.seen.append(state)
-                container.add_node(n=state, shape=shape)
-
-    def _add_edges(self, events, sub):
-        for event in events.items():
-            event = event[1]
-            label = str(event.name)
-
-            for transitions in event.transitions.items():
-                src = transitions[0]
-                for t in transitions[1]:
-                    dst = self.machine.get_state(t.dest)
-                    if dst.children is not None:
-                        dst = dst.get_initial().name
-                    else:
-                        dst = dst.name
-                    sub.add_edge(src, dst, label=label)
 
 
 # Added parent and children parameter children is a list of NestedStates
@@ -68,7 +22,7 @@ class NestedState(State):
     # A step with children will be initialized with the first child which
     # is a Leaf in the hierarchical tree and does not contain further children.
     def get_initial(self):
-        state = self.children[0]
+        state = self.children[0] if self.children is not None else self
         return state.get_initial() if state.children is not None else state
 
 
@@ -123,20 +77,6 @@ class NestedTransition(Transition):
         # enter all states of the queue in reversed order, starting from topmost state
         for s in enter_queue[::-1]:
             s.enter(event_data)
-
-
-class LockedTransition(Transition):
-
-    def execute(self, event_data):
-        with event_data.machine.lock:
-            return super(LockedTransition, self).execute(event_data)
-
-
-class LockedNestedTransition(NestedTransition):
-
-    def execute(self, event_data):
-        with event_data.machine.lock:
-            return super(LockedNestedTransition, self).execute(event_data)
 
 
 class HierarchicalMachine(Machine):
@@ -264,19 +204,21 @@ class HierarchicalMachine(Machine):
         return names
 
     def add_transition(self, trigger, source, dest, conditions=None,
-                       unless=None, before=None, after=None):
+                       unless=None, before=None, after=None, prepare=None):
         if not (trigger.startswith('to_') and source == '*'):
-            bp_before = None
-            bp_after = None
+            bp_prepare = prepare
+            bp_before = before
+            bp_after = after
             if self.before_state_change:
                 bp_before = listify(before) + listify(self.before_state_change)
             if self.after_state_change:
                 bp_after = listify(after) + listify(self.after_state_change)
             self.blueprints['transitions'].append({'trigger': trigger, 'source': source, 'dest': dest,
-                                                   'conditions': conditions, 'unless': unless, 'before': bp_before,
-                                                   'after': bp_after})
+                                                   'conditions': conditions, 'unless': unless, 'prepare': bp_prepare,
+                                                   'before': bp_before, 'after': bp_after})
         if isinstance(source, string_types):
-            source = list(self.states.keys()) if source == '*' else [source]
+            source = [x.name for x in self.states.values() if x.children is None] \
+                if source == '*' else [source]
 
         for s in source:
             state = self.get_state(s)
@@ -288,54 +230,5 @@ class HierarchicalMachine(Machine):
                 source.extend(self._traverse_nested(state.children))
 
         super(HierarchicalMachine, self).add_transition(trigger, source, dest, conditions=conditions,
-                                                        unless=unless, before=before, after=after)
+                                                        unless=unless, prepare=prepare, before=before, after=after)
 
-    def get_graph(self, title=None, diagram_class=AAGraph):
-        return super(HierarchicalMachine, self).get_graph(title, diagram_class)
-
-
-class LockedMethod:
-    def __init__(self, lock, func):
-        self.lock = lock
-        self.func = func
-
-    def __call__(self, *args, **kwargs):
-        with self.lock:
-            return self.func(*args, **kwargs)
-
-
-# lock access to methods of the state machine
-# can be used if threaded access to the state machine is required.
-class LockedMachine(Machine):
-
-    def __init__(self, *args, **kwargs):
-        self.lock = RLock()
-        super(LockedMachine, self).__init__(*args, **kwargs)
-
-    @staticmethod
-    def _create_transition(*args, **kwargs):
-        return LockedTransition(*args, **kwargs)
-
-    def __getattribute__(self, item):
-        f = super(LockedMachine, self).__getattribute__
-        tmp = f(item)
-        if inspect.ismethod(tmp) and item not in "__getattribute__":
-            return LockedMethod(f('lock'), tmp)
-        return tmp
-
-    def __getattr__(self, item):
-        try:
-            return super(LockedMachine, self).__getattribute__(item)
-        except AttributeError:
-            return super(LockedMachine, self).__getattr__(item)
-
-
-# Uses HSM as well as Mutex features
-class LockedHierarchicalMachine(LockedMachine, HierarchicalMachine):
-
-    def __init__(self, *args, **kwargs):
-        super(LockedHierarchicalMachine, self).__init__(*args, **kwargs)
-
-    @staticmethod
-    def _create_transition(*args, **kwargs):
-        return LockedNestedTransition(*args, **kwargs)
