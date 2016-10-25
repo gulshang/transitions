@@ -172,7 +172,7 @@ class Transition(object):
 
 class NonTransition(Transition):
 
-    def __init__(self, conditions=None, unless=None, before=None, after=None):
+    def __init__(self, states=[], conditions=None, unless=None, before=None, after=None):
         """
         Args:
             conditions (string, list): Condition(s) that must pass in order for
@@ -186,6 +186,7 @@ class NonTransition(Transition):
                 transition.
             after (string or list): callbacks to trigger after the transition.
         """
+        self.states = [] if states is None else listify(states)
         self.before = [] if before is None else listify(before)
         self.after = [] if after is None else listify(after)
 
@@ -198,17 +199,17 @@ class NonTransition(Transition):
                 self.conditions.append(Condition(u, target=False))
 
     def execute(self, event_data):
-        """ Execute the transition.
+        """ Execute the Non Transition.
         Args:
             event: An instance of class EventData.
-        Returns: boolean indicating whether or not the transition was
+        Returns: boolean indicating whether or not the nontransition was
             successfully executed (True if successful, False if not).
         """
         machine = event_data.machine
         for c in self.conditions:
             if not c.check(event_data):
-                logger.info("Transition condition failed: %s() does not " +
-                            "return %s. Transition halted.", c.func, c.target)
+                logger.info("NonTransition condition failed: %s() does not " +
+                            "return %s. NonTransition halted.", c.func, c.target)
                 return False
         for func in self.before:
             machine.callback(getattr(event_data.model, func), event_data)
@@ -289,6 +290,8 @@ class Event(object):
         event = EventData(self.machine.current_state, self, self.machine,
                           self.machine.model, args=args, kwargs=kwargs)
         for nt in self.non_transitions:
+            if self.machine.current_state not in nt.states:
+                return False
             if nt.execute(event):
                 return True
 
