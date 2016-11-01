@@ -275,7 +275,8 @@ class Event(object):
             non_transition (NonTransition): The NonTransition instance to add to the
                 list.
         """
-        self.non_transitions.append(non_transition)
+        if self.machine.current_state in non_transition.states:
+            self.non_transitions.append(non_transition)
 
     def trigger(self, *args, **kwargs):
         """ Serially execute all transitions that match the current state,
@@ -290,8 +291,6 @@ class Event(object):
         event = EventData(self.machine.current_state, self, self.machine,
                           self.machine.model, args=args, kwargs=kwargs)
         for nt in self.non_transitions:
-            if self.machine.current_state not in nt.states:
-                return False
             if nt.execute(event):
                 return True
 
