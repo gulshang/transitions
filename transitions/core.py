@@ -172,9 +172,11 @@ class Transition(object):
 
 class NonTransition(Transition):
 
-    def __init__(self, states=[], conditions=None, unless=None, before=None, after=None):
+    def __init__(self, states=None, conditions=None, unless=None, before=None, after=None):
         """
         Args:
+            states (string, list): State(s) in which NonTransition is can
+                happen
             conditions (string, list): Condition(s) that must pass in order for
                 the transition to take place. Either a string providing the
                 name of a callable, or a list of callables. For the transition
